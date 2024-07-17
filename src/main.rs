@@ -1,7 +1,6 @@
 use chrono::{Local, Duration, DateTime};
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::Instant;
 
 struct ConnectivityCheck {
     timestamp: DateTime<Local>,
@@ -35,15 +34,19 @@ fn main() {
 
     println!("{} start", Local::now());
 
+    let mut failed_checks = 0;
+    let mut total_checks = 0;
     loop {
         let now = Local::now();
         for ip_address in &ip_addresses {
             let success = check_connectivity(ip_address);
+            total_checks += 1;
             results.push_back(ConnectivityCheck {
                 timestamp: now,
                 success,
             });
             if !success {
+                failed_checks += 1;
                 println!("{} {:?} failed", now, ip_address);
             }
         }
@@ -55,17 +58,27 @@ fn main() {
         }
 
         // Calculate statistics
-        let mut total_checks = 0;
-        let mut failed_checks = 0;
+        let mut total_checks_min = 0;
+        let mut total_checks_10_min = 0;
+        let mut total_checks_30_min = 0;
+        let mut total_checks_hour = 0;
         let mut failed_last_min = 0;
         let mut failed_last_10_min = 0;
         let mut failed_last_30_min = 0;
         let mut failed_last_hour = 0;
 
         for check in &results {
-            total_checks += 1;
+            if check.timestamp > now - Duration::minutes(1) {
+                total_checks_min += 1;
+            }
+            if check.timestamp > now - Duration::minutes(10) {
+                total_checks_10_min += 1;
+            }
+            if check.timestamp > now - Duration::minutes(30) {
+                total_checks_30_min += 1;
+            }
+            total_checks_hour += 1;
             if !check.success {
-                failed_checks += 1;
                 if check.timestamp > now - Duration::minutes(1) {
                     failed_last_min += 1;
                 }
@@ -75,21 +88,17 @@ fn main() {
                 if check.timestamp > now - Duration::minutes(30) {
                     failed_last_30_min += 1;
                 }
-                if check.timestamp > now - Duration::hours(1) {
-                    failed_last_hour += 1;
-                }
+                failed_last_hour += 1;
             }
         }
 
-        println!("\nStatistics:");
-        println!("% failed: {:.2}%", calculate_percentage(failed_checks, total_checks));
-        println!("% failed last 1 min: {:.2}%", calculate_percentage(failed_last_min, total_checks));
-        println!("% failed last 10 min: {:.2}%", calculate_percentage(failed_last_10_min, total_checks));
-        println!("% failed last 30 min: {:.2}%", calculate_percentage(failed_last_30_min, total_checks));
-        println!("% failed last 1 hour: {:.2}%", calculate_percentage(failed_last_hour, total_checks));
+        println!("% failed last 1 min:\t{:.0} %", calculate_percentage(failed_last_min, total_checks_min));
+        println!("% failed last 10 min:\t{:.0} %", calculate_percentage(failed_last_10_min, total_checks_10_min));
+        println!("% failed last 30 min:\t{:.0} %", calculate_percentage(failed_last_30_min, total_checks_30_min));
+        println!("% failed last 1 hour:\t{:.0} %", calculate_percentage(failed_last_hour, total_checks_hour));
+        println!("% failed total:\t\t{:.0} %", calculate_percentage(failed_checks, total_checks));
 
         // Print simple graph
-        println!("\nGraph:");
         for check in &results {
             let symbol = if check.success { "█" } else { "░" };
             print!("{}", symbol);
