@@ -92,11 +92,11 @@ fn main() {
             }
         }
 
-        println!("% failed last 1 min:\t{:.0} %", calculate_percentage(failed_last_min, total_checks_min));
-        println!("% failed last 10 min:\t{:.0} %", calculate_percentage(failed_last_10_min, total_checks_10_min));
-        println!("% failed last 30 min:\t{:.0} %", calculate_percentage(failed_last_30_min, total_checks_30_min));
-        println!("% failed last 1 hour:\t{:.0} %", calculate_percentage(failed_last_hour, total_checks_hour));
-        println!("% failed total:\t\t{:.0} %", calculate_percentage(failed_checks, total_checks));
+        println!("% failed last 1 min:\t{:.0} %\t{failed_last_min}/{total_checks_min}", calculate_percentage(failed_last_min, total_checks_min));
+        println!("% failed last 10 min:\t{:.0} %\t{failed_last_10_min}/{total_checks_10_min}", calculate_percentage(failed_last_10_min, total_checks_10_min));
+        println!("% failed last 30 min:\t{:.0} %\t{failed_last_30_min}/{total_checks_30_min}", calculate_percentage(failed_last_30_min, total_checks_30_min));
+        println!("% failed last 1 hour:\t{:.0} %\t{failed_last_hour}/{total_checks_hour}", calculate_percentage(failed_last_hour, total_checks_hour));
+        println!("% failed total:\t\t{:.0} %\t{failed_checks}/{total_checks}", calculate_percentage(failed_checks, total_checks));
 
         // Print simple graph
         for check in &results {
