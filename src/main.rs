@@ -112,14 +112,30 @@ fn main() {
 fn print_combined_graph(results: &VecDeque<ConnectivityCheck>) {
     let mut i = 0;
     while i < results.len() {
+        let a = results[i].success;
+        let b = if i + 1 < results.len() { results[i + 1].success } else { false };
+        let c = if i + 2 < results.len() { results[i + 2].success } else { false };
+        let d = if i + 3 < results.len() { results[i + 3].success } else { false };
         let symbol =
-            match (results[i].success, results[i + 1].success) {
-                (true, true) => "█",  // both success
-                (true, false) => "▌",  // first success, second failure
-                (false, true) => "▐",  // first failure, second success
-                (false, false) => "░",  // both failure
+            match (a,b,c,d) {
+                (true, true, true, true) => "█",
+                (true, true, true, false) => "▛",
+                (true, true, false, true) => "▜",
+                (true, true, false, false) => "▀",
+                (true, false, true, true) => "▙",
+                (true, false, true, false) => "▌",
+                (true, false, false, true) => "▚",
+                (true, false, false, false) => "▘",
+                (false, true, true, true) => "▟",
+                (false, true, true, false) => "▞",
+                (false, true, false, true) => "▐",
+                (false, true, false, false) => "▝",
+                (false, false, true, true) => "▄",
+                (false, false, true, false) => "▖",
+                (false, false, false, true) => "▗",
+                (false, false, false, false) => "░",
             };
         print!("{}", symbol);
-        i += 2;
+        i += 4;
     }
 }
