@@ -100,15 +100,26 @@ fn main() {
                 );
             }
         }
-        println!("% failed total:\t\t{:.0} %\t{failed_checks}/{total_checks}", calculate_percentage(failed_checks, total_checks));
+        println!("total failures:\t\t{:.0} %\t{failed_checks}/{total_checks}", calculate_percentage(failed_checks, total_checks));
 
-        // Print simple graph
-        for check in &results {
-            let symbol = if check.success { "█" } else { "░" };
-            print!("{}", symbol);
-        }
+        print_combined_graph(&results);
         println!();
 
         std::thread::sleep(ten_seconds);
+    }
+}
+
+fn print_combined_graph(results: &VecDeque<ConnectivityCheck>) {
+    let mut i = 0;
+    while i < results.len() {
+        let symbol =
+            match (results[i].success, results[i + 1].success) {
+                (true, true) => "█",  // both success
+                (true, false) => "▓",  // first success, second failure
+                (false, true) => "▒",  // first failure, second success
+                (false, false) => "░",  // both failure
+            };
+        print!("{}", symbol);
+        i += 2;
     }
 }
