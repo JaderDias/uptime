@@ -52,50 +52,53 @@ fn main() {
         }
 
         // Remove old results
-        let one_hour_ago = now - Duration::hours(1);
-        while results.front().map_or(false, |check| check.timestamp < one_hour_ago) {
+        let one_week_ago = now - Duration::days(7);
+        while results.front().map_or(false, |check| check.timestamp < one_week_ago) {
             results.pop_front();
         }
 
         // Calculate statistics
-        let mut total_checks_min = 0;
-        let mut total_checks_10_min = 0;
-        let mut total_checks_30_min = 0;
-        let mut total_checks_hour = 0;
-        let mut failed_last_min = 0;
-        let mut failed_last_10_min = 0;
-        let mut failed_last_30_min = 0;
-        let mut failed_last_hour = 0;
+        let intervals = vec![
+            Duration::minutes(1),
+            Duration::minutes(10),
+            Duration::minutes(30),
+            Duration::hours(1),
+            Duration::hours(2),
+            Duration::hours(4),
+            Duration::hours(6),
+            Duration::hours(12),
+            Duration::hours(24),
+            Duration::days(2),
+            Duration::days(4),
+            Duration::days(7),
+        ];
+        let mut failed_counts = vec![0; intervals.len()];
+        let mut total_counts = vec![0; intervals.len()];
 
         for check in &results {
-            if check.timestamp > now - Duration::minutes(1) {
-                total_checks_min += 1;
-            }
-            if check.timestamp > now - Duration::minutes(10) {
-                total_checks_10_min += 1;
-            }
-            if check.timestamp > now - Duration::minutes(30) {
-                total_checks_30_min += 1;
-            }
-            total_checks_hour += 1;
-            if !check.success {
-                if check.timestamp > now - Duration::minutes(1) {
-                    failed_last_min += 1;
+            for (i, &interval) in intervals.iter().enumerate() {
+                if check.timestamp > now - interval {
+                    total_counts[i] += 1;
+                    if !check.success {
+                        failed_counts[i] += 1;
+                    }
                 }
-                if check.timestamp > now - Duration::minutes(10) {
-                    failed_last_10_min += 1;
-                }
-                if check.timestamp > now - Duration::minutes(30) {
-                    failed_last_30_min += 1;
-                }
-                failed_last_hour += 1;
             }
         }
 
-        println!("% failed last 1 min:\t{:.0} %\t{failed_last_min}/{total_checks_min}", calculate_percentage(failed_last_min, total_checks_min));
-        println!("% failed last 10 min:\t{:.0} %\t{failed_last_10_min}/{total_checks_10_min}", calculate_percentage(failed_last_10_min, total_checks_10_min));
-        println!("% failed last 30 min:\t{:.0} %\t{failed_last_30_min}/{total_checks_30_min}", calculate_percentage(failed_last_30_min, total_checks_30_min));
-        println!("% failed last 1 hour:\t{:.0} %\t{failed_last_hour}/{total_checks_hour}", calculate_percentage(failed_last_hour, total_checks_hour));
+        let labels = vec![
+            "1 min", "10 min", "30 min", "1 hour", "2 hours", "4 hours",
+            "6 hours", "12 hours", "24 hours", "2 days", "4 days", "7 days",
+        ];
+
+        for (i, &label) in labels.iter().enumerate() {
+            println!("failed last {}:\t{:.0} %\t{}/{}",
+                     label,
+                     calculate_percentage(failed_counts[i], total_counts[i]),
+                     failed_counts[i],
+                     total_counts[i]);
+        }
+
         println!("% failed total:\t\t{:.0} %\t{failed_checks}/{total_checks}", calculate_percentage(failed_checks, total_checks));
 
         // Print simple graph
