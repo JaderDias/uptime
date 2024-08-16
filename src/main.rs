@@ -32,12 +32,14 @@ fn main() {
     let mut results: VecDeque<ConnectivityCheck> = VecDeque::new();
     let ten_seconds = std::time::Duration::from_secs(10);
 
-    println!("{} start", Local::now());
+    let start_time = Local::now();
+    println!("{} start", start_time);
 
     let mut failed_checks = 0;
     let mut total_checks = 0;
     loop {
         let now = Local::now();
+        let runtime = now - start_time;
         for ip_address in &ip_addresses {
             let success = check_connectivity(ip_address);
             total_checks += 1;
@@ -59,24 +61,25 @@ fn main() {
 
         // Calculate statistics
         let intervals = vec![
-            Duration::minutes(1),
-            Duration::minutes(10),
-            Duration::minutes(30),
-            Duration::hours(1),
-            Duration::hours(2),
-            Duration::hours(4),
-            Duration::hours(6),
-            Duration::hours(12),
-            Duration::hours(24),
-            Duration::days(2),
-            Duration::days(4),
-            Duration::days(7),
+            (Duration::minutes(1), "1 min"),
+            (Duration::minutes(10), "10 min"),
+            (Duration::minutes(30), "30 min"),
+            (Duration::hours(1), "1 hour"),
+            (Duration::hours(2), "2 hours"),
+            (Duration::hours(4), "4 hours"),
+            (Duration::hours(6), "6 hours"),
+            (Duration::hours(12), "12 hours"),
+            (Duration::hours(24), "24 hours"),
+            (Duration::days(2), "2 days"),
+            (Duration::days(4), "4 days"),
+            (Duration::days(7), "7 days"),
         ];
+
         let mut failed_counts = vec![0; intervals.len()];
         let mut total_counts = vec![0; intervals.len()];
 
         for check in &results {
-            for (i, &interval) in intervals.iter().enumerate() {
+            for (i, &(interval, _)) in intervals.iter().enumerate() {
                 if check.timestamp > now - interval {
                     total_counts[i] += 1;
                     if !check.success {
@@ -86,19 +89,17 @@ fn main() {
             }
         }
 
-        let labels = vec![
-            "1 min", "10 min", "30 min", "1 hour", "2 hours", "4 hours",
-            "6 hours", "12 hours", "24 hours", "2 days", "4 days", "7 days",
-        ];
-
-        for (i, &label) in labels.iter().enumerate() {
-            println!("failed last {}:\t{:.0} %\t{}/{}",
-                     label,
-                     calculate_percentage(failed_counts[i], total_counts[i]),
-                     failed_counts[i],
-                     total_counts[i]);
+        for (i, &(_, label)) in intervals.iter().enumerate() {
+            if runtime >= intervals[i].0 {
+                println!(
+                    "failed last {}:\t{:.0} %\t{}/{}",
+                    label,
+                    calculate_percentage(failed_counts[i], total_counts[i]),
+                    failed_counts[i],
+                    total_counts[i]
+                );
+            }
         }
-
         println!("% failed total:\t\t{:.0} %\t{failed_checks}/{total_checks}", calculate_percentage(failed_checks, total_checks));
 
         // Print simple graph
