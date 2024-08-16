@@ -115,8 +115,8 @@ fn print_combined_graph(results: &VecDeque<ConnectivityCheck>) {
         let symbol =
             match (results[i].success, results[i + 1].success) {
                 (true, true) => "█",  // both success
-                (true, false) => "▓",  // first success, second failure
-                (false, true) => "▒",  // first failure, second success
+                (true, false) => "▌",  // first success, second failure
+                (false, true) => "▐",  // first failure, second success
                 (false, false) => "░",  // both failure
             };
         print!("{}", symbol);
