@@ -1,4 +1,4 @@
-use chrono::{Local, Duration, DateTime};
+use chrono::{DateTime, Duration, Local};
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -8,9 +8,12 @@ struct ConnectivityCheck {
 }
 
 fn check_connectivity(ip_address: &IpAddr) -> bool {
-    let data = [1, 2, 3, 4];  // ping data
+    let data = [1, 2, 3, 4]; // ping data
     let timeout = std::time::Duration::from_secs(1);
-    let options = ping_rs::PingOptions { ttl: 128, dont_fragment: true };
+    let options = ping_rs::PingOptions {
+        ttl: 128,
+        dont_fragment: true,
+    };
     let result = ping_rs::send_ping(ip_address, timeout, &data, Some(&options));
     result.is_ok()
 }
@@ -55,7 +58,10 @@ fn main() {
 
         // Remove old results
         let one_week_ago = now - Duration::days(7);
-        while results.front().map_or(false, |check| check.timestamp < one_week_ago) {
+        while results
+            .front()
+            .map_or(false, |check| check.timestamp < one_week_ago)
+        {
             results.pop_front();
         }
 
@@ -100,7 +106,10 @@ fn main() {
                 );
             }
         }
-        println!("total failures:\t\t{:.0} %\t{failed_checks}/{total_checks}", calculate_percentage(failed_checks, total_checks));
+        println!(
+            "total failures:\t\t{:.0} %\t{failed_checks}/{total_checks}",
+            calculate_percentage(failed_checks, total_checks)
+        );
 
         print_combined_graph(&results);
         println!();
@@ -113,28 +122,27 @@ fn print_combined_graph(results: &VecDeque<ConnectivityCheck>) {
     let mut i = 0;
     while i < results.len() {
         let a = results[i].success;
-        let b = if i + 1 < results.len() { results[i + 1].success } else { false };
-        let c = if i + 2 < results.len() { results[i + 2].success } else { false };
-        let d = if i + 3 < results.len() { results[i + 3].success } else { false };
-        let symbol =
-            match (a,b,c,d) {
-                (true, true, true, true) => "█",
-                (true, true, true, false) => "▛",
-                (true, true, false, true) => "▜",
-                (true, true, false, false) => "▀",
-                (true, false, true, true) => "▙",
-                (true, false, true, false) => "▌",
-                (true, false, false, true) => "▚",
-                (true, false, false, false) => "▘",
-                (false, true, true, true) => "▟",
-                (false, true, true, false) => "▞",
-                (false, true, false, true) => "▐",
-                (false, true, false, false) => "▝",
-                (false, false, true, true) => "▄",
-                (false, false, true, false) => "▖",
-                (false, false, false, true) => "▗",
-                (false, false, false, false) => "░",
-            };
+        let b = results.get(i + 1).map_or(false, |c| c.success);
+        let c = results.get(i + 2).map_or(false, |c| c.success);
+        let d = results.get(i + 3).map_or(false, |c| c.success);
+        let symbol = match (a, b, c, d) {
+            (true, true, true, true) => "█",
+            (true, true, true, false) => "▛",
+            (true, true, false, true) => "▜",
+            (true, true, false, false) => "▀",
+            (true, false, true, true) => "▙",
+            (true, false, true, false) => "▌",
+            (true, false, false, true) => "▚",
+            (true, false, false, false) => "▘",
+            (false, true, true, true) => "▟",
+            (false, true, true, false) => "▞",
+            (false, true, false, true) => "▐",
+            (false, true, false, false) => "▝",
+            (false, false, true, true) => "▄",
+            (false, false, true, false) => "▖",
+            (false, false, false, true) => "▗",
+            (false, false, false, false) => "░",
+        };
         print!("{}", symbol);
         i += 4;
     }
