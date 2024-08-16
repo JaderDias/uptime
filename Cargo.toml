@@ -1,8 +1,10 @@
 [package]
 name = "monitor"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
 chrono = "0.4.38"
 ping-rs = "0.1.2"
+tokio = { version = "1", features = ["full"] }
+warp = "0.3"
