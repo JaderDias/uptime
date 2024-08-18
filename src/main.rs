@@ -65,7 +65,7 @@ async fn generate_report(results: Arc<Mutex<VecDeque<ConnectivityCheck>>>, separ
     for (i, &(_, label)) in intervals.iter().enumerate() {
         if runtime >= intervals[i].0 {
             output.push_str(&format!(
-                "failed last {}:\t{:.0} %\t{}/{}{separator}>",
+                "failed last {}:\t{:.0} %\t{}/{}{separator}",
                 label,
                 calculate_percentage(failed_counts[i], total_counts[i]),
                 failed_counts[i],
