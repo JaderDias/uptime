@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Local};
+use chrono::{DateTime, Datelike, Duration, Local, Timelike};
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
@@ -28,7 +28,10 @@ fn calculate_percentage(failures: usize, total: usize) -> f64 {
     }
 }
 
-async fn generate_report(results: Arc<Mutex<VecDeque<ConnectivityCheck>>>, separator: &str) -> String {
+async fn generate_report(
+    results: Arc<Mutex<VecDeque<ConnectivityCheck>>>,
+    separator: &str,
+) -> String {
     let now = Local::now();
     let mut output = String::new();
     let runtime = now - results.lock().unwrap().front().unwrap().timestamp;
@@ -77,14 +80,14 @@ async fn generate_report(results: Arc<Mutex<VecDeque<ConnectivityCheck>>>, separ
     if runtime < intervals.last().expect("missing element").0 {
         output.push_str(&format!(
             "total failed:\t{:.0} %\t{}/{}{separator}",
-            calculate_percentage(*failed_counts.last().expect("missing element"), *total_counts.last().expect("missing element")),
+            calculate_percentage(
+                *failed_counts.last().expect("missing element"),
+                *total_counts.last().expect("missing element")
+            ),
             failed_counts.last().expect("missing element"),
             total_counts.last().expect("missing element")
         ));
     }
-
-    output.push_str("Combined Graph: ");
-    output.push_str(&print_combined_graph(&results.lock().unwrap()));
 
     output
 }
@@ -121,6 +124,38 @@ fn print_combined_graph(results: &VecDeque<ConnectivityCheck>) -> String {
     graph
 }
 
+fn get_rows(results: &VecDeque<ConnectivityCheck>) -> String {
+    let mut graph = vec![];
+    let mut i = 0;
+    while i < results.len() {
+        let mut successes = 0;
+        let mut failures = 0;
+        let timestamp = results[i].timestamp;
+        for j in i..results.len() {
+            if results[j].timestamp.minute() != timestamp.minute() {
+                break;
+            }
+            if results[j].success {
+                successes += 1;
+            } else {
+                failures += 1;
+            }
+            i = j;
+        }
+
+        graph.push(format!(
+            "[new Date({}, {}, {}, {}, {}), {successes}, {failures}]",
+            timestamp.year(),
+            timestamp.month0(),
+            timestamp.day(),
+            timestamp.hour(),
+            timestamp.minute()
+        ));
+        i += 1;
+    }
+    graph.join(",")
+}
+
 #[tokio::main]
 async fn main() {
     let ip_addresses = vec![
@@ -130,6 +165,7 @@ async fn main() {
 
     let results: Arc<Mutex<VecDeque<ConnectivityCheck>>> = Arc::new(Mutex::new(VecDeque::new()));
     let results_clone = Arc::clone(&results);
+    let results_clone2 = Arc::clone(&results);
 
     tokio::spawn(async move {
         let ten_seconds = std::time::Duration::from_secs(10);
@@ -145,7 +181,14 @@ async fn main() {
                 });
             }
 
-            println!("{}", generate_report(results_clone.clone(), "\n").await.as_str());
+            println!(
+                "{}",
+                generate_report(results_clone.clone(), "\n").await.as_str()
+            );
+            println!(
+                "Combined Graph:\n{}",
+                &print_combined_graph(&results_clone2.lock().unwrap())
+            );
 
             // Remove old results
             let one_week_ago = now - Duration::days(7);
@@ -165,9 +208,38 @@ async fn main() {
     let report_route = warp::path::end()
         .and_then(move || {
             let results_clone = Arc::clone(&results);
+            let results_clone2 = Arc::clone(&results);
             async move {
                 let report = generate_report(results_clone, "<br/>").await;
-                Ok::<_, warp::Rejection>(warp::reply::html(report))
+                let rows = get_rows(&results_clone2.lock().unwrap());
+                let html = format!(r#"<html>
+  <head>
+    <script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>
+    <script type='text/javascript'>
+      google.charts.load('current', {{'packages':['annotatedtimeline']}});
+      google.charts.setOnLoadCallback(drawChart);
+      function drawChart() {{
+        var data = new google.visualization.DataTable();
+        data.addColumn('date', 'Date');
+        data.addColumn('number', 'Sucesses');
+        data.addColumn('number', 'Failures');
+        data.addRows([
+            {rows}
+        ]);
+
+        var chart = new google.visualization.AnnotatedTimeLine(document.getElementById('chart_div'));
+        chart.draw(data, {{displayAnnotations: true}});
+      }}
+    </script>
+  </head>
+
+  <body>
+    {report}
+    <div id='chart_div' style='width: 700px; height: 240px;'></div>
+  </body>
+</html>
+"#);
+                Ok::<_, warp::Rejection>(warp::reply::html(html))
             }
         });
 
