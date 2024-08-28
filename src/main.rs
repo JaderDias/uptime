@@ -84,7 +84,7 @@ fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>) -> Vec<Str
 
     if runtime < intervals.last().expect("missing element").0 {
         output.push(format!(
-            "{CLEAR_LINE}total failed:\t{:.0} %\t{}/{}",
+            "{CLEAR_LINE}total failed:\t\t{:.0} %\t{}/{}",
             calculate_percentage(
                 *failed_counts.last().expect("missing element"),
                 *total_counts.last().expect("missing element")
