@@ -11,6 +11,9 @@ struct ConnectivityCheck {
     success: bool,
 }
 
+const CLEAR_LINE: &'static str = "\x1b[K";
+const MOVE_ONE_LINE_UP: &'static str = "\r\x1b[1A";
+
 fn check_connectivity(ip_address: &IpAddr) -> bool {
     let data = [1, 2, 3, 4]; // ping data
     let timeout = std::time::Duration::from_secs(1);
@@ -70,7 +73,7 @@ fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>) -> Vec<Str
     for (i, &(_, label)) in intervals.iter().enumerate() {
         if runtime >= intervals[i].0 {
             output.push(format!(
-                "failed last {}:\t{:.0} %\t{}/{}",
+                "{CLEAR_LINE}failed last {}:\t{:.0} %\t{}/{}",
                 label,
                 calculate_percentage(failed_counts[i], total_counts[i]),
                 failed_counts[i],
@@ -81,7 +84,7 @@ fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>) -> Vec<Str
 
     if runtime < intervals.last().expect("missing element").0 {
         output.push(format!(
-            "total failed:\t{:.0} %\t{}/{}",
+            "{CLEAR_LINE}total failed:\t{:.0} %\t{}/{}",
             calculate_percentage(
                 *failed_counts.last().expect("missing element"),
                 *total_counts.last().expect("missing element")
@@ -193,13 +196,13 @@ async fn main() {
                 .chars()
                 .take(combined_graph.chars().count() - 1)
                 .collect();
-            print!("Combined Graph:\n{}", &combined_graph);
+            println!();
             for _ in 0..10 {
                 tokio::time::sleep(blink_interval).await;
-                print!("\r{} ", &combined_graph);
+                println!("{MOVE_ONE_LINE_UP}{combined_graph}");
                 stdout.flush().unwrap();
                 tokio::time::sleep(blink_interval).await;
-                print!("\r{combined_graph_without_last}  ");
+                println!("{MOVE_ONE_LINE_UP}{combined_graph_without_last} ");
                 stdout.flush().unwrap();
             }
 
