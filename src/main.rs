@@ -31,10 +31,10 @@ fn calculate_percentage(failures: usize, total: usize) -> f64 {
     }
 }
 
-fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>, separator: &str) -> String {
+fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>) -> Vec<String> {
     let now = Local::now();
-    let mut output = String::new();
-    let runtime = now - results.lock().unwrap().front().unwrap().timestamp;
+    let mut output = Vec::new();
+    let runtime = { now - results.lock().unwrap().front().unwrap().timestamp };
 
     let intervals = vec![
         (Duration::minutes(1), "1 min"),
@@ -54,7 +54,8 @@ fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>, separator:
     let mut failed_counts = vec![0; intervals.len()];
     let mut total_counts = vec![0; intervals.len()];
 
-    let results_clone: Vec<ConnectivityCheck> = results.lock().unwrap().iter().cloned().collect();
+    let results_clone: Vec<ConnectivityCheck> =
+        { results.lock().unwrap().iter().cloned().collect() };
     for check in results_clone {
         for (i, &(interval, _)) in intervals.iter().enumerate() {
             if check.timestamp > now - interval {
@@ -68,8 +69,8 @@ fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>, separator:
 
     for (i, &(_, label)) in intervals.iter().enumerate() {
         if runtime >= intervals[i].0 {
-            output.push_str(&format!(
-                "failed last {}:\t{:.0} %\t{}/{}{separator}",
+            output.push(format!(
+                "failed last {}:\t{:.0} %\t{}/{}",
                 label,
                 calculate_percentage(failed_counts[i], total_counts[i]),
                 failed_counts[i],
@@ -79,8 +80,8 @@ fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>, separator:
     }
 
     if runtime < intervals.last().expect("missing element").0 {
-        output.push_str(&format!(
-            "total failed:\t{:.0} %\t{}/{}{separator}",
+        output.push(format!(
+            "total failed:\t{:.0} %\t{}/{}",
             calculate_percentage(
                 *failed_counts.last().expect("missing element"),
                 *total_counts.last().expect("missing element")
@@ -163,12 +164,12 @@ async fn main() {
 
     let results: Arc<Mutex<VecDeque<ConnectivityCheck>>> = Arc::new(Mutex::new(VecDeque::new()));
     let results_clone = Arc::clone(&results);
-    let results_clone2 = Arc::clone(&results);
     let mut stdout = stdout();
 
     tokio::spawn(async move {
         let blink_interval = std::time::Duration::from_millis(250);
         println!("start time {}", Local::now());
+        let mut report_lines = 0;
 
         loop {
             let now = Local::now();
@@ -180,15 +181,25 @@ async fn main() {
                 });
             }
 
-            println!("{}", generate_report(&results_clone, "\n").as_str());
-            let combined_graph = print_combined_graph(&results_clone2.lock().unwrap());
+            let report = generate_report(&results_clone);
+            if report_lines > 0 {
+                println!("\r\x1b[{report_lines}A{}", report.join("\n"));
+            } else {
+                println!("{}", report.join("\n"));
+            }
+            report_lines = report.len() + 1;
+            let combined_graph = { print_combined_graph(&results_clone.lock().unwrap()) };
+            let combined_graph_without_last: String = combined_graph
+                .chars()
+                .take(combined_graph.chars().count() - 1)
+                .collect();
             print!("Combined Graph:\n{}", &combined_graph);
             for _ in 0..10 {
                 tokio::time::sleep(blink_interval).await;
-                print!("\r{}▏", &combined_graph);
+                print!("\r{} ", &combined_graph);
                 stdout.flush().unwrap();
                 tokio::time::sleep(blink_interval).await;
-                print!("\r{} ", &combined_graph);
+                print!("\r{combined_graph_without_last}  ");
                 stdout.flush().unwrap();
             }
 
@@ -209,7 +220,7 @@ async fn main() {
         .and_then(move || {
             let results_clone = Arc::clone(&results);
             async move {
-                let report = generate_report(&results_clone, "<br/>");
+                let report = generate_report(&results_clone).join("<br/>");
                 let rows = get_rows(&results_clone.lock().unwrap());
                 let html = format!(r#"<html>
   <head>
