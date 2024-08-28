@@ -196,7 +196,7 @@ async fn main() {
             }
             report_lines = report.len() + REPORT_LINES;
             let graph = { get_graph(&results_clone.lock().unwrap()) };
-            println!("<< most recent\n{graph}");
+            println!("{CLEAR_LINE}<< most recent\n{graph}");
                 tokio::time::sleep(check_interval).await;
 
             // Remove old results
