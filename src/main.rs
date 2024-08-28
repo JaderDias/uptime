@@ -1,9 +1,11 @@
 use chrono::{DateTime, Datelike, Duration, Local, Timelike};
 use std::collections::VecDeque;
+use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use warp::Filter;
 
+#[derive(Clone)]
 struct ConnectivityCheck {
     timestamp: DateTime<Local>,
     success: bool,
@@ -20,6 +22,7 @@ fn check_connectivity(ip_address: &IpAddr) -> bool {
     result.is_ok()
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn calculate_percentage(failures: usize, total: usize) -> f64 {
     if total == 0 {
         0.0
@@ -28,10 +31,7 @@ fn calculate_percentage(failures: usize, total: usize) -> f64 {
     }
 }
 
-async fn generate_report(
-    results: Arc<Mutex<VecDeque<ConnectivityCheck>>>,
-    separator: &str,
-) -> String {
+fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>, separator: &str) -> String {
     let now = Local::now();
     let mut output = String::new();
     let runtime = now - results.lock().unwrap().front().unwrap().timestamp;
@@ -54,7 +54,8 @@ async fn generate_report(
     let mut failed_counts = vec![0; intervals.len()];
     let mut total_counts = vec![0; intervals.len()];
 
-    for check in results.lock().unwrap().iter() {
+    let results_clone: Vec<ConnectivityCheck> = results.lock().unwrap().iter().cloned().collect();
+    for check in results_clone {
         for (i, &(interval, _)) in intervals.iter().enumerate() {
             if check.timestamp > now - interval {
                 total_counts[i] += 1;
@@ -94,32 +95,29 @@ async fn generate_report(
 
 fn print_combined_graph(results: &VecDeque<ConnectivityCheck>) -> String {
     let mut graph = String::new();
-    let mut i = 0;
-    while i < results.len() {
-        let a = results[i].success;
-        let b = results.get(i + 1).map_or(false, |c| c.success);
-        let c = results.get(i + 2).map_or(false, |c| c.success);
-        let d = results.get(i + 3).map_or(false, |c| c.success);
-        let symbol = match (a, b, c, d) {
-            (true, true, true, true) => "█",
-            (true, true, true, false) => "▛",
-            (true, true, false, true) => "▜",
-            (true, true, false, false) => "▀",
-            (true, false, true, true) => "▙",
-            (true, false, true, false) => "▌",
-            (true, false, false, true) => "▚",
-            (true, false, false, false) => "▘",
-            (false, true, true, true) => "▟",
-            (false, true, true, false) => "▞",
-            (false, true, false, true) => "▐",
-            (false, true, false, false) => "▝",
-            (false, false, true, true) => "▄",
-            (false, false, true, false) => "▖",
-            (false, false, false, true) => "▗",
-            (false, false, false, false) => "░",
+    for i in (0..results.len()).step_by(9) {
+        let mut total = 0;
+        for j in 0..9 {
+            if let Some(check) = results.get(i + j) {
+                if check.success {
+                    total += 1;
+                }
+            } else {
+                break;
+            }
+        }
+        let symbol = match total {
+            0 => "░",
+            1 => "▏",
+            2 => "▎",
+            3 => "▍",
+            4 => "▌",
+            5 => "▋",
+            6 => "▊",
+            7 => "▉",
+            _ => "█",
         };
         graph.push_str(symbol);
-        i += 4;
     }
     graph
 }
@@ -131,11 +129,11 @@ fn get_rows(results: &VecDeque<ConnectivityCheck>) -> String {
         let mut successes = 0;
         let mut failures = 0;
         let timestamp = results[i].timestamp;
-        for j in i..results.len() {
-            if results[j].timestamp.minute() != timestamp.minute() {
+        for (j, check) in results.iter().enumerate().skip(i) {
+            if check.timestamp.minute() != timestamp.minute() {
                 break;
             }
-            if results[j].success {
+            if check.success {
                 successes += 1;
             } else {
                 failures += 1;
@@ -166,9 +164,10 @@ async fn main() {
     let results: Arc<Mutex<VecDeque<ConnectivityCheck>>> = Arc::new(Mutex::new(VecDeque::new()));
     let results_clone = Arc::clone(&results);
     let results_clone2 = Arc::clone(&results);
+    let mut stdout = stdout();
 
     tokio::spawn(async move {
-        let ten_seconds = std::time::Duration::from_secs(10);
+        let blink_interval = std::time::Duration::from_millis(250);
         println!("start time {}", Local::now());
 
         loop {
@@ -181,14 +180,17 @@ async fn main() {
                 });
             }
 
-            println!(
-                "{}",
-                generate_report(results_clone.clone(), "\n").await.as_str()
-            );
-            println!(
-                "Combined Graph:\n{}",
-                &print_combined_graph(&results_clone2.lock().unwrap())
-            );
+            println!("{}", generate_report(&results_clone, "\n").as_str());
+            let combined_graph = print_combined_graph(&results_clone2.lock().unwrap());
+            print!("Combined Graph:\n{}", &combined_graph);
+            for _ in 0..10 {
+                tokio::time::sleep(blink_interval).await;
+                print!("\r{}▏", &combined_graph);
+                stdout.flush().unwrap();
+                tokio::time::sleep(blink_interval).await;
+                print!("\r{} ", &combined_graph);
+                stdout.flush().unwrap();
+            }
 
             // Remove old results
             let one_week_ago = now - Duration::days(7);
@@ -200,18 +202,15 @@ async fn main() {
             {
                 results_clone.lock().unwrap().pop_front();
             }
-
-            tokio::time::sleep(ten_seconds).await;
         }
     });
 
     let report_route = warp::path::end()
         .and_then(move || {
             let results_clone = Arc::clone(&results);
-            let results_clone2 = Arc::clone(&results);
             async move {
-                let report = generate_report(results_clone, "<br/>").await;
-                let rows = get_rows(&results_clone2.lock().unwrap());
+                let report = generate_report(&results_clone, "<br/>");
+                let rows = get_rows(&results_clone.lock().unwrap());
                 let html = format!(r#"<html>
   <head>
     <script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>
