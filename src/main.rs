@@ -1,6 +1,5 @@
 use chrono::{DateTime, Datelike, Duration, Local, Timelike};
 use std::collections::VecDeque;
-use std::io::{stdout, Write};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use warp::Filter;
@@ -12,7 +11,7 @@ struct ConnectivityCheck {
 }
 
 const CLEAR_LINE: &'static str = "\x1b[K";
-const MOVE_ONE_LINE_UP: &'static str = "\r\x1b[1A";
+const REPORT_LINES: usize = 2;
 
 fn check_connectivity(ip_address: &IpAddr) -> bool {
     let data = [1, 2, 3, 4]; // ping data
@@ -97,18 +96,22 @@ fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>) -> Vec<Str
     output
 }
 
-fn print_combined_graph(results: &VecDeque<ConnectivityCheck>) -> String {
+fn get_graph(results: &VecDeque<ConnectivityCheck>) -> String {
     let mut graph = String::new();
-    for i in (0..results.len()).step_by(9) {
+    let mut results_iter = results.iter();
+    let mut check: Option<&ConnectivityCheck> = results_iter.next_back();
+    loop {
         let mut total = 0;
-        for j in 0..9 {
-            if let Some(check) = results.get(i + j) {
-                if check.success {
+        for _ in 0..9 {
+            if let Some(some_check) = check {
+                if some_check.success {
                     total += 1;
                 }
             } else {
                 break;
             }
+
+            check = results_iter.next_back();
         }
         let symbol = match total {
             0 => "░",
@@ -122,8 +125,10 @@ fn print_combined_graph(results: &VecDeque<ConnectivityCheck>) -> String {
             _ => "█",
         };
         graph.push_str(symbol);
+        if let None = check {
+            return graph;
+        }
     }
-    graph
 }
 
 fn get_rows(results: &VecDeque<ConnectivityCheck>) -> String {
@@ -167,10 +172,9 @@ async fn main() {
 
     let results: Arc<Mutex<VecDeque<ConnectivityCheck>>> = Arc::new(Mutex::new(VecDeque::new()));
     let results_clone = Arc::clone(&results);
-    let mut stdout = stdout();
 
     tokio::spawn(async move {
-        let blink_interval = std::time::Duration::from_millis(250);
+        let check_interval = std::time::Duration::from_secs(10);
         println!("start time {}", Local::now());
         let mut report_lines = 0;
 
@@ -190,21 +194,10 @@ async fn main() {
             } else {
                 println!("{}", report.join("\n"));
             }
-            report_lines = report.len() + 1;
-            let combined_graph = { print_combined_graph(&results_clone.lock().unwrap()) };
-            let combined_graph_without_last: String = combined_graph
-                .chars()
-                .take(combined_graph.chars().count() - 1)
-                .collect();
-            println!();
-            for _ in 0..10 {
-                tokio::time::sleep(blink_interval).await;
-                println!("{MOVE_ONE_LINE_UP}{combined_graph}");
-                stdout.flush().unwrap();
-                tokio::time::sleep(blink_interval).await;
-                println!("{MOVE_ONE_LINE_UP}{combined_graph_without_last} ");
-                stdout.flush().unwrap();
-            }
+            report_lines = report.len() + REPORT_LINES;
+            let graph = { get_graph(&results_clone.lock().unwrap()) };
+            println!("<< most recent\n{graph}");
+                tokio::time::sleep(check_interval).await;
 
             // Remove old results
             let one_week_ago = now - Duration::days(7);
