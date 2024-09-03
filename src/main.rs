@@ -11,6 +11,7 @@ struct ConnectivityCheck {
 }
 
 const CLEAR_LINE: &'static str = "\x1b[K";
+const MOVE_CURSOR_UP: &'static str = "\r\x1b[";
 const REPORT_LINES: usize = 2;
 
 fn check_connectivity(ip_address: &IpAddr) -> bool {
@@ -72,7 +73,7 @@ fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>) -> Vec<Str
     for (i, &(_, label)) in intervals.iter().enumerate() {
         if runtime >= intervals[i].0 {
             output.push(format!(
-                "{CLEAR_LINE}failed last {}:\t{:.0} %\t{}/{}",
+                "failed last {}:\t{:.0} %\t{}/{}",
                 label,
                 calculate_percentage(failed_counts[i], total_counts[i]),
                 failed_counts[i],
@@ -83,7 +84,7 @@ fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>) -> Vec<Str
 
     if runtime < intervals.last().expect("missing element").0 {
         output.push(format!(
-            "{CLEAR_LINE}total failed:\t\t{:.0} %\t{}/{}",
+            "total failed:\t\t{:.0} %\t{}/{}",
             calculate_percentage(
                 *failed_counts.last().expect("missing element"),
                 *total_counts.last().expect("missing element")
@@ -174,7 +175,7 @@ async fn main() {
     let results_clone = Arc::clone(&results);
 
     tokio::spawn(async move {
-        let check_interval = std::time::Duration::from_secs(10);
+        let check_interval = std::time::Duration::from_secs(5);
         println!("start time {}", Local::now());
         let mut report_lines = 0;
 
@@ -190,7 +191,7 @@ async fn main() {
 
             let report = generate_report(&results_clone);
             if report_lines > 0 {
-                println!("\r\x1b[{report_lines}A{}", report.join("\n"));
+                println!("{MOVE_CURSOR_UP}{report_lines}A{}", report.join(&format!("\n{CLEAR_LINE}")));
             } else {
                 println!("{}", report.join("\n"));
             }
