@@ -12,10 +12,11 @@ struct ConnectivityCheck {
 
 const CLEAR_LINE: &'static str = "\x1b[K";
 const MOVE_CURSOR_UP: &'static str = "\r\x1b[";
+const MTU_SIZE: usize = 1472;
 const REPORT_LINES: usize = 2;
 
 fn check_connectivity(ip_address: &IpAddr) -> bool {
-    let data = [1, 2, 3, 4]; // ping data
+    let data: [u8; MTU_SIZE] = [0; MTU_SIZE]; // ping data. Some ISPs force you to use a router/modem that support PPPoE with baby jumbo frames (1500 bytes internally, 1508 bytes externally, RFC 4638). If you set the MTU size to 1472 bytes (+28 bytes of overhead = 1500 bytes), with fragmentation disabled, you can test it.
     let timeout = std::time::Duration::from_secs(1);
     let options = ping_rs::PingOptions {
         ttl: 128,
