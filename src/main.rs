@@ -10,7 +10,7 @@ struct ConnectivityCheck {
     success: bool,
 }
 
-const CLEAR_LINE: &'static str = "\x1b[K";
+const NEW_CLEAR_LINE: &'static str = "\n\x1b[K";
 const MOVE_CURSOR_UP: &'static str = "\r\x1b[";
 const MTU_SIZE: usize = 1472;
 const REPORT_LINES: usize = 2;
@@ -192,14 +192,17 @@ async fn main() {
 
             let report = generate_report(&results_clone);
             if report_lines > 0 {
-                println!("{MOVE_CURSOR_UP}{report_lines}A{}", report.join(&format!("\n{CLEAR_LINE}")));
+                print!(
+                    "{MOVE_CURSOR_UP}{report_lines}A{}",
+                    report.join(NEW_CLEAR_LINE)
+                );
             } else {
-                println!("{}", report.join("\n"));
+                print!("{}", report.join(NEW_CLEAR_LINE));
             }
             report_lines = report.len() + REPORT_LINES;
             let graph = { get_graph(&results_clone.lock().unwrap()) };
-            println!("{CLEAR_LINE}<< most recent\n{graph}");
-                tokio::time::sleep(check_interval).await;
+            println!("{NEW_CLEAR_LINE}<< most recent{NEW_CLEAR_LINE}{graph}");
+            tokio::time::sleep(check_interval).await;
 
             // Remove old results
             let one_week_ago = now - Duration::days(7);
