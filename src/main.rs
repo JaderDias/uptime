@@ -10,13 +10,20 @@ struct ConnectivityCheck {
     success: bool,
 }
 
-const NEW_CLEAR_LINE: &'static str = "\n\x1b[K";
-const MOVE_CURSOR_UP: &'static str = "\r\x1b[";
+const NEW_CLEAR_LINE: &str = "\n\x1b[K";
+const MOVE_CURSOR_UP: &str = "\r\x1b[";
 const MTU_SIZE: usize = 1472;
+const MTU_SIZE_MINUS_8: usize = MTU_SIZE - 8;
+const PING_PAYLOAD: [u8; MTU_SIZE] = [0; MTU_SIZE];
+const PING_PAYLOAD_MINUS_8: [u8; MTU_SIZE_MINUS_8] = [0; MTU_SIZE_MINUS_8];
 const REPORT_LINES: usize = 2;
 
-fn check_connectivity(ip_address: &IpAddr) -> bool {
-    let data: [u8; MTU_SIZE] = [0; MTU_SIZE]; // ping data. Some ISPs force you to use a router/modem that support PPPoE with baby jumbo frames (1500 bytes internally, 1508 bytes externally, RFC 4638). If you set the MTU size to 1472 bytes (+28 bytes of overhead = 1500 bytes), with fragmentation disabled, you can test it.
+fn check_connectivity(ip_address: &IpAddr, mtu_size: usize) -> bool {
+    let data = if mtu_size == MTU_SIZE {
+        PING_PAYLOAD.to_vec()
+    } else {
+        PING_PAYLOAD_MINUS_8.to_vec()
+    };
     let timeout = std::time::Duration::from_secs(1);
     let options = ping_rs::PingOptions {
         ttl: 128,
@@ -127,7 +134,7 @@ fn get_graph(results: &VecDeque<ConnectivityCheck>) -> String {
             _ => "█",
         };
         graph.push_str(symbol);
-        if let None = check {
+        if check.is_none() {
             return graph;
         }
     }
@@ -183,11 +190,13 @@ async fn main() {
         loop {
             let now = Local::now();
             for ip_address in &ip_addresses {
-                let success = check_connectivity(ip_address);
-                results_clone.lock().unwrap().push_back(ConnectivityCheck {
-                    timestamp: now,
-                    success,
-                });
+                for mtu_size in [MTU_SIZE, MTU_SIZE_MINUS_8] {
+                    let success = check_connectivity(ip_address, mtu_size);
+                    results_clone.lock().unwrap().push_back(ConnectivityCheck {
+                        timestamp: now,
+                        success,
+                    });
+                }
             }
 
             let report = generate_report(&results_clone);
