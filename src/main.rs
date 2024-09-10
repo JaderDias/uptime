@@ -197,7 +197,7 @@ async fn main() {
       <head>
         <script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>
         <script type='text/javascript'>
-          google.charts.load('current', {{'packages':['annotatedtimeline']}});
+          google.charts.load('current', {{'packages':['annotationchart']}});
           google.charts.setOnLoadCallback(drawChart);
           function drawChart() {{
             var data = new google.visualization.DataTable();
@@ -206,7 +206,7 @@ async fn main() {
                 {rows}
             ]);
 
-            var chart = new google.visualization.AnnotatedTimeLine(document.getElementById('chart_div'));
+            var chart = new google.visualization.AnnotationChart(document.getElementById('chart_div'));
             chart.draw(data, {{
               displayAnnotations: true,
               scaleType: 'allfixed',
