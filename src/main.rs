@@ -1,268 +1,233 @@
 use chrono::{DateTime, Datelike, Duration, Local, Timelike};
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use warp::Filter;
 
-#[derive(Clone)]
-struct ConnectivityCheck {
-    timestamp: DateTime<Local>,
-    success: bool,
-}
-
 const NEW_CLEAR_LINE: &str = "\n\x1b[K";
 const MOVE_CURSOR_UP: &str = "\r\x1b[";
-const MTU_SIZE: usize = 1472;
-const MTU_SIZE_MINUS_8: usize = MTU_SIZE - 8;
-const PING_PAYLOAD: [u8; MTU_SIZE] = [0; MTU_SIZE];
-const PING_PAYLOAD_MINUS_8: [u8; MTU_SIZE_MINUS_8] = [0; MTU_SIZE_MINUS_8];
-const REPORT_LINES: usize = 2;
+const MIN_MTU_SIZE: usize = 1448;
+const MAX_MTU_SIZE: usize = 1476;
+const MTU_STEP: usize = 4;
+
+const PING_OPTIONS: ping_rs::PingOptions = ping_rs::PingOptions {
+    ttl: 128,
+    dont_fragment: true,
+};
 
 fn check_connectivity(ip_address: &IpAddr, mtu_size: usize) -> bool {
-    let data = if mtu_size == MTU_SIZE {
-        PING_PAYLOAD.to_vec()
-    } else {
-        PING_PAYLOAD_MINUS_8.to_vec()
-    };
     let timeout = std::time::Duration::from_secs(1);
-    let options = ping_rs::PingOptions {
-        ttl: 128,
-        dont_fragment: true,
-    };
-    let result = ping_rs::send_ping(ip_address, timeout, &data, Some(&options));
+    let data: Vec<u8> = vec![0; mtu_size];
+    let result = ping_rs::send_ping(ip_address, timeout, &data, Some(&PING_OPTIONS));
     result.is_ok()
 }
 
-#[allow(clippy::cast_precision_loss)]
-fn calculate_percentage(failures: usize, total: usize) -> f64 {
-    if total == 0 {
-        0.0
-    } else {
-        (failures as f64 / total as f64) * 100.0
-    }
-}
-
-fn generate_report(results: &Arc<Mutex<VecDeque<ConnectivityCheck>>>) -> Vec<String> {
-    let now = Local::now();
-    let mut output = Vec::new();
-    let runtime = { now - results.lock().unwrap().front().unwrap().timestamp };
-
-    let intervals = vec![
-        (Duration::minutes(1), "1 min"),
-        (Duration::minutes(10), "10 min"),
-        (Duration::minutes(30), "30 min"),
-        (Duration::hours(1), "1 hour"),
-        (Duration::hours(2), "2 hours"),
-        (Duration::hours(4), "4 hours"),
-        (Duration::hours(6), "6 hours"),
-        (Duration::hours(12), "12 hours"),
-        (Duration::hours(24), "24 hours"),
-        (Duration::days(2), "2 days"),
-        (Duration::days(4), "4 days"),
-        (Duration::days(7), "7 days"),
-    ];
-
-    let mut failed_counts = vec![0; intervals.len()];
-    let mut total_counts = vec![0; intervals.len()];
-
-    let results_clone: Vec<ConnectivityCheck> =
-        { results.lock().unwrap().iter().cloned().collect() };
-    for check in results_clone {
-        for (i, &(interval, _)) in intervals.iter().enumerate() {
-            if check.timestamp > now - interval {
-                total_counts[i] += 1;
-                if !check.success {
-                    failed_counts[i] += 1;
-                }
-            }
+fn check_connectivity_with_mtu(ip_address: &IpAddr) -> Option<usize> {
+    for mtu_size in (MIN_MTU_SIZE..=MAX_MTU_SIZE).rev().step_by(MTU_STEP) {
+        if check_connectivity(ip_address, mtu_size) {
+            return Some(mtu_size); // Return the successful MTU size
         }
     }
-
-    for (i, &(_, label)) in intervals.iter().enumerate() {
-        if runtime >= intervals[i].0 {
-            output.push(format!(
-                "failed last {}:\t{:.0} %\t{}/{}",
-                label,
-                calculate_percentage(failed_counts[i], total_counts[i]),
-                failed_counts[i],
-                total_counts[i]
-            ));
-        }
-    }
-
-    if runtime < intervals.last().expect("missing element").0 {
-        output.push(format!(
-            "total failed:\t\t{:.0} %\t{}/{}",
-            calculate_percentage(
-                *failed_counts.last().expect("missing element"),
-                *total_counts.last().expect("missing element")
-            ),
-            failed_counts.last().expect("missing element"),
-            total_counts.last().expect("missing element")
-        ));
-    }
-
-    output
+    None // Return None if all MTU sizes fail
 }
 
-fn get_graph(results: &VecDeque<ConnectivityCheck>) -> String {
+fn get_graph_of_successes(
+    results: &VecDeque<(DateTime<Local>, usize)>,
+    ip_address: &IpAddr,
+) -> String {
     let mut graph = String::new();
-    let mut results_iter = results.iter();
-    let mut check: Option<&ConnectivityCheck> = results_iter.next_back();
-    loop {
-        let mut total = 0;
-        for _ in 0..9 {
-            if let Some(some_check) = check {
-                if some_check.success {
-                    total += 1;
-                }
-            } else {
-                break;
-            }
-
-            check = results_iter.next_back();
-        }
-        let symbol = match total {
-            0 => "░",
-            1 => "▏",
-            2 => "▎",
-            3 => "▍",
-            4 => "▌",
-            5 => "▋",
-            6 => "▊",
-            7 => "▉",
-            _ => "█",
+    for &(_, mtu_size) in results.iter() {
+        let symbol = match mtu_size {
+            MAX_MTU_SIZE => "█", // Biggest size is the fullest block
+            1472 => "▉",
+            1468 => "▊",
+            1464 => "▋",
+            1460 => "▌",
+            1456 => "▍",
+            1452 => "▎",
+            MIN_MTU_SIZE => "▏", // Smallest size is the smallest block
+            _ => "░",            // No success is represented by an empty symbol
         };
         graph.push_str(symbol);
-        if check.is_none() {
-            return graph;
-        }
     }
+    format!("{}: {}", ip_address, graph)
 }
 
-fn get_rows(results: &VecDeque<ConnectivityCheck>) -> String {
-    let mut graph = vec![];
-    let mut i = 0;
-    while i < results.len() {
-        let mut successes = 0;
-        let mut failures = 0;
-        let timestamp = results[i].timestamp;
-        for (j, check) in results.iter().enumerate().skip(i) {
-            if check.timestamp.minute() != timestamp.minute() {
-                break;
-            }
-            if check.success {
-                successes += 1;
-            } else {
-                failures += 1;
-            }
-            i = j;
-        }
+fn get_rows_for_html_graph(
+    results: &HashMap<IpAddr, Arc<Mutex<VecDeque<(DateTime<Local>, usize)>>>>,
+    ip_addresses: &[IpAddr],
+) -> String {
+    let mut rows = vec![];
 
-        graph.push(format!(
-            "[new Date({}, {}, {}, {}, {}), {successes}, {failures}]",
+    // Collect all unique timestamps
+    let mut timestamps_set = BTreeSet::new();
+    for ip in ip_addresses {
+        for &(timestamp, _) in results.get(ip).unwrap().lock().unwrap().iter() {
+            timestamps_set.insert(timestamp);
+        }
+    }
+
+    // For each timestamp, get the MTU sizes for each IP
+    for timestamp in timestamps_set {
+        let mut row = format!(
+            "[new Date({}, {}, {}, {}, {}), ",
             timestamp.year(),
-            timestamp.month0(),
+            timestamp.month() - 1, // month0 in Rust is 0-based, JavaScript months are 0-based
             timestamp.day(),
             timestamp.hour(),
             timestamp.minute()
-        ));
-        i += 1;
-    }
-    graph.join(",")
-}
+        );
 
+        for (i, ip) in ip_addresses.iter().enumerate() {
+            let mtu_size = results
+                .get(ip)
+                .unwrap()
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|&&(ts, _)| ts == timestamp)
+                .map(|&(_, mtu)| mtu as f64)
+                .unwrap_or(0.0); // If no data for that timestamp, use 0
+            row.push_str(&format!("{}", mtu_size));
+            if i < ip_addresses.len() - 1 {
+                row.push_str(", ");
+            }
+        }
+        row.push(']');
+        rows.push(row);
+    }
+    rows.join(",\n")
+}
 #[tokio::main]
 async fn main() {
+    use std::collections::HashMap;
+
     let ip_addresses = vec![
         IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
         IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
     ];
 
-    let results: Arc<Mutex<VecDeque<ConnectivityCheck>>> = Arc::new(Mutex::new(VecDeque::new()));
-    let results_clone = Arc::clone(&results);
+    // Clone ip_addresses before moving it into the async closure
+    let ip_addresses_clone = ip_addresses.clone();
+
+    let results: HashMap<IpAddr, Arc<Mutex<VecDeque<(DateTime<Local>, usize)>>>> = ip_addresses
+        .iter()
+        .map(|ip| (*ip, Arc::new(Mutex::new(VecDeque::new()))))
+        .collect();
+
+    let results_clone = results.clone();
 
     tokio::spawn(async move {
         let check_interval = std::time::Duration::from_secs(5);
         println!("start time {}", Local::now());
-        let mut report_lines = 0;
 
         loop {
             let now = Local::now();
-            for ip_address in &ip_addresses {
-                for mtu_size in [MTU_SIZE, MTU_SIZE_MINUS_8] {
-                    let success = check_connectivity(ip_address, mtu_size);
-                    results_clone.lock().unwrap().push_back(ConnectivityCheck {
-                        timestamp: now,
-                        success,
-                    });
+            for ip_address in &ip_addresses_clone {
+                // Check for successful MTU size
+                if let Some(successful_mtu) = check_connectivity_with_mtu(ip_address) {
+                    // Add the timestamp and successful MTU size to results
+                    results_clone
+                        .get(ip_address)
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .push_back((now, successful_mtu));
+                } else {
+                    // If all MTU sizes fail, store 0 as the MTU size
+                    results_clone
+                        .get(ip_address)
+                        .unwrap()
+                        .lock()
+                        .unwrap()
+                        .push_back((now, 0));
                 }
             }
 
-            let report = generate_report(&results_clone);
-            if report_lines > 0 {
-                print!(
-                    "{MOVE_CURSOR_UP}{report_lines}A{}",
-                    report.join(NEW_CLEAR_LINE)
+            print!("{MOVE_CURSOR_UP}3A");
+
+            // Generate the console graph only for successful pings
+            for ip_address in &ip_addresses_clone {
+                let graph = get_graph_of_successes(
+                    &results_clone.get(ip_address).unwrap().lock().unwrap(),
+                    ip_address,
                 );
-            } else {
-                print!("{}", report.join(NEW_CLEAR_LINE));
+                print!("{NEW_CLEAR_LINE}{graph}");
             }
-            report_lines = report.len() + REPORT_LINES;
-            let graph = { get_graph(&results_clone.lock().unwrap()) };
-            println!("{NEW_CLEAR_LINE}<< most recent{NEW_CLEAR_LINE}{graph}");
+
+            println!();
             tokio::time::sleep(check_interval).await;
 
-            // Remove old results
+            // Remove old results older than one week
             let one_week_ago = now - Duration::days(7);
-            while results_clone
-                .lock()
-                .unwrap()
-                .front()
-                .map_or(false, |check| check.timestamp < one_week_ago)
-            {
-                results_clone.lock().unwrap().pop_front();
+            for ip_address in &ip_addresses_clone {
+                let results_for_ip = results_clone.get(ip_address).unwrap();
+                let mut results_lock = results_for_ip.lock().unwrap();
+                while results_lock
+                    .front()
+                    .map_or(false, |(timestamp, _)| *timestamp < one_week_ago)
+                {
+                    results_lock.pop_front();
+                }
             }
         }
     });
 
+    // Serve the HTML version that graphs the MTU size of the most recent successful pings
     let report_route = warp::path::end()
         .and_then(move || {
-            let results_clone = Arc::clone(&results);
+            let results_clone = results.clone();
+            let ip_addresses = ip_addresses.clone(); // Re-use the original ip_addresses
             async move {
-                let report = generate_report(&results_clone).join("<br/>");
-                let rows = get_rows(&results_clone.lock().unwrap());
-                let html = format!(r#"<html>
-  <head>
-    <script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>
-    <script type='text/javascript'>
-      google.charts.load('current', {{'packages':['annotatedtimeline']}});
-      google.charts.setOnLoadCallback(drawChart);
-      function drawChart() {{
-        var data = new google.visualization.DataTable();
-        data.addColumn('date', 'Date');
-        data.addColumn('number', 'Sucesses');
-        data.addColumn('number', 'Failures');
-        data.addRows([
-            {rows}
-        ]);
+                let rows = get_rows_for_html_graph(&results_clone, &ip_addresses);
 
-        var chart = new google.visualization.AnnotatedTimeLine(document.getElementById('chart_div'));
-        chart.draw(data, {{displayAnnotations: true}});
-      }}
-    </script>
-  </head>
+                // Prepare the column definitions
+                let mut columns = String::from("data.addColumn('date', 'Date');\n");
+                for ip_address in &ip_addresses {
+                    columns.push_str(&format!(
+                        "data.addColumn('number', '{}');\n",
+                        ip_address
+                    ));
+                }
 
-  <body>
-    {report}
-    <div id='chart_div' style='width: 700px; height: 240px;'></div>
-  </body>
-</html>
-"#);
+                let html = format!(
+                    r#"<html>
+      <head>
+        <script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>
+        <script type='text/javascript'>
+          google.charts.load('current', {{'packages':['annotatedtimeline']}});
+          google.charts.setOnLoadCallback(drawChart);
+          function drawChart() {{
+            var data = new google.visualization.DataTable();
+            {columns}
+            data.addRows([
+                {rows}
+            ]);
+
+            var chart = new google.visualization.AnnotatedTimeLine(document.getElementById('chart_div'));
+            chart.draw(data, {{
+              displayAnnotations: true,
+              scaleType: 'allfixed',
+              legendPosition: 'newRow',
+              thickness: 2,
+              zoomStartTime: new Date(new Date().getTime() - 24*60*60*1000)  // Start from 24 hours ago
+            }});
+          }}
+        </script>
+      </head>
+
+      <body>
+        <div id='chart_div' style='width: 900px; height: 500px;'></div>
+      </body>
+    </html>
+    "#
+                );
                 Ok::<_, warp::Rejection>(warp::reply::html(html))
             }
         });
 
-    println!("report also available via HTTP port 8080");
+    println!("Report also available via HTTP port 8080");
     warp::serve(report_route).run(([0, 0, 0, 0], 8080)).await;
 }
