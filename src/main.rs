@@ -9,7 +9,7 @@ use warp::Filter;
 const NEW_CLEAR_LINE: &str = "\n\x1b[K";
 const MOVE_CURSOR_UP: &str = "\r\x1b[";
 const MIN_MTU_SIZE: usize = 1448;
-const MAX_MTU_SIZE: usize = 1500;
+const MAX_MTU_SIZE: usize = 1504;
 const MTU_STEP: usize = 4;
 
 const PING_OPTIONS: ping_rs::PingOptions = ping_rs::PingOptions {
@@ -41,6 +41,7 @@ fn get_graph_of_successes(
     for &(_, mtu_size) in results.iter() {
         let symbol = match mtu_size {
             MAX_MTU_SIZE => "█", // Biggest size is the fullest block
+            1500 => "█",
             1496 => "▉",
             1492 => "▊",
             1488 => "▋",
