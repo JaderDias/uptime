@@ -33,29 +33,6 @@ fn check_connectivity_with_mtu(ip_address: &IpAddr) -> Option<usize> {
     None // Return None if all MTU sizes fail
 }
 
-fn get_graph_of_successes(
-    results: &VecDeque<(DateTime<Local>, usize)>,
-    ip_address: &IpAddr,
-) -> String {
-    let mut graph = String::new();
-    for &(_, mtu_size) in results.iter() {
-        let symbol = match mtu_size {
-            MAX_MTU_SIZE => "█", // Biggest size is the fullest block
-            1500 => "█",
-            1496 => "▉",
-            1492 => "▊",
-            1488 => "▋",
-            1480 => "▌",
-            1476 => "▍",
-            1472 => "▎",
-            0 => "░",            // No success is represented by an empty symbol
-            _ => "▏",
-        };
-        graph.push_str(symbol);
-    }
-    format!("{}: {}", ip_address, graph)
-}
-
 fn get_rows_for_html_graph(
     results: &HashMap<IpAddr, Arc<Mutex<VecDeque<(DateTime<Local>, usize)>>>>,
     ip_addresses: &[IpAddr],
@@ -126,6 +103,7 @@ async fn main() {
 
         loop {
             let now = Local::now();
+            print!("{MOVE_CURSOR_UP}3A");
             for ip_address in &ip_addresses_clone {
                 // Check for successful MTU size
                 if let Some(successful_mtu) = check_connectivity_with_mtu(ip_address) {
@@ -136,6 +114,7 @@ async fn main() {
                         .lock()
                         .unwrap()
                         .push_back((now, successful_mtu));
+                    print!("{NEW_CLEAR_LINE}{ip_address}: {successful_mtu}");
                 } else {
                     // If all MTU sizes fail, store 0 as the MTU size
                     results_clone
@@ -144,18 +123,8 @@ async fn main() {
                         .lock()
                         .unwrap()
                         .push_back((now, 0));
+                    print!("{NEW_CLEAR_LINE}{ip_address}: 0");
                 }
-            }
-
-            print!("{MOVE_CURSOR_UP}3A");
-
-            // Generate the console graph only for successful pings
-            for ip_address in &ip_addresses_clone {
-                let graph = get_graph_of_successes(
-                    &results_clone.get(ip_address).unwrap().lock().unwrap(),
-                    ip_address,
-                );
-                print!("{NEW_CLEAR_LINE}{graph}");
             }
 
             println!();
