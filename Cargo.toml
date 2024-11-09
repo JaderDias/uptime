@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4.38"
+dotenvy = "0.15.7"
 ping-rs = { git = "https://github.com/JaderDias/ping-rs.git", branch = "master" }
 tokio = { version = "1", features = ["full"] }
 warp = "0.3"

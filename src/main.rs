@@ -1,8 +1,10 @@
 use chrono::{DateTime, Datelike, Duration, Local, Timelike};
+use dotenvy::dotenv;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::net::{IpAddr, Ipv4Addr};
+use std::env;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use warp::Filter;
 
@@ -80,12 +82,13 @@ fn get_rows_for_html_graph(
 }
 #[tokio::main]
 async fn main() {
-    use std::collections::HashMap;
+    dotenv().ok();
 
-    let ip_addresses = vec![
-        IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)),
-        IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-    ];
+    let ip_addresses: Vec<IpAddr> = env::var("IP_ADDRESSES")
+        .expect("IP_ADDRESSES must be set in .env")
+        .split(',')
+        .map(|ip| ip.trim().parse().expect("Invalid IP address format"))
+        .collect();
 
     // Clone ip_addresses before moving it into the async closure
     let ip_addresses_clone = ip_addresses.clone();
@@ -98,12 +101,11 @@ async fn main() {
     let results_clone = results.clone();
 
     tokio::spawn(async move {
-        let check_interval = std::time::Duration::from_secs(5);
         println!("start time {}", Local::now());
 
         loop {
             let now = Local::now();
-            print!("{MOVE_CURSOR_UP}3A");
+            print!("{MOVE_CURSOR_UP}7A");
             for ip_address in &ip_addresses_clone {
                 // Check for successful MTU size
                 if let Some(successful_mtu) = check_connectivity_with_mtu(ip_address) {
@@ -128,7 +130,6 @@ async fn main() {
             }
 
             println!();
-            tokio::time::sleep(check_interval).await;
 
             // Remove old results older than one week
             let one_week_ago = now - Duration::days(7);
