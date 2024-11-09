@@ -1,3 +1,5 @@
+mod model;
+
 use chrono::{DateTime, Datelike, Duration, Local, Timelike};
 use dotenvy::dotenv;
 use std::collections::BTreeSet;
@@ -7,6 +9,7 @@ use std::env;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use warp::Filter;
+use crate::model::{MetricType, PingResult};
 
 const NEW_CLEAR_LINE: &str = "\n\x1b[K";
 const MOVE_CURSOR_UP: &str = "\r\x1b[";
@@ -19,25 +22,37 @@ const PING_OPTIONS: ping_rs::PingOptions = ping_rs::PingOptions {
     dont_fragment: true,
 };
 
-fn check_connectivity(ip_address: &IpAddr, mtu_size: usize) -> bool {
+fn check_connectivity(ip_address: &IpAddr, mtu_size: usize) -> Option<u128> {
     let timeout = std::time::Duration::from_secs(1);
     let data: Vec<u8> = vec![0; mtu_size];
+
+    let start_time = std::time::Instant::now();
     let result = ping_rs::send_ping(ip_address, timeout, &data, Some(&PING_OPTIONS));
-    result.is_ok()
+    let latency_micros = start_time.elapsed().as_micros();
+
+    if result.is_ok() {
+        Some(latency_micros)
+    } else {
+        None
+    }
 }
 
-fn check_connectivity_with_mtu(ip_address: &IpAddr) -> Option<usize> {
+fn check_connectivity_with_mtu(ip_address: &IpAddr) -> Option<PingResult> {
     for mtu_size in (MIN_MTU_SIZE..=MAX_MTU_SIZE).rev().step_by(MTU_STEP) {
-        if check_connectivity(ip_address, mtu_size) {
-            return Some(mtu_size); // Return the successful MTU size
+        if let Some(latency_micros) = check_connectivity(ip_address, mtu_size) {
+            return Some(PingResult {
+                mtu: mtu_size,
+                latency_micros,
+            }); // Return the successful MTU size
         }
     }
     None // Return None if all MTU sizes fail
 }
 
 fn get_rows_for_html_graph(
-    results: &HashMap<IpAddr, Arc<Mutex<VecDeque<(DateTime<Local>, usize)>>>>,
+    results: &HashMap<IpAddr, Arc<Mutex<VecDeque<(DateTime<Local>, PingResult)>>>>,
     ip_addresses: &[IpAddr],
+    metric_type: MetricType,
 ) -> String {
     let mut rows = vec![];
 
@@ -68,7 +83,7 @@ fn get_rows_for_html_graph(
                 .unwrap()
                 .iter()
                 .find(|&&(ts, _)| ts == timestamp)
-                .map(|&(_, mtu)| mtu as f64)
+                .map(|(_, ping_result)| match metric_type { MetricType::MTU => ping_result.mtu as f64, MetricType::Latency => ping_result.latency_micros as f64 })
                 .unwrap_or(0.0); // If no data for that timestamp, use 0
             row.push_str(&format!("{}", mtu_size));
             if i < ip_addresses.len() - 1 {
@@ -80,6 +95,8 @@ fn get_rows_for_html_graph(
     }
     rows.join(",\n")
 }
+
+
 #[tokio::main]
 async fn main() {
     dotenv().ok();
@@ -93,10 +110,11 @@ async fn main() {
     // Clone ip_addresses before moving it into the async closure
     let ip_addresses_clone = ip_addresses.clone();
 
-    let results: HashMap<IpAddr, Arc<Mutex<VecDeque<(DateTime<Local>, usize)>>>> = ip_addresses
-        .iter()
-        .map(|ip| (*ip, Arc::new(Mutex::new(VecDeque::new()))))
-        .collect();
+    let results: HashMap<IpAddr, Arc<Mutex<VecDeque<(DateTime<Local>, PingResult)>>>> =
+        ip_addresses
+            .iter()
+            .map(|ip| (*ip, Arc::new(Mutex::new(VecDeque::new()))))
+            .collect();
 
     let results_clone = results.clone();
 
@@ -108,15 +126,15 @@ async fn main() {
             print!("{MOVE_CURSOR_UP}7A");
             for ip_address in &ip_addresses_clone {
                 // Check for successful MTU size
-                if let Some(successful_mtu) = check_connectivity_with_mtu(ip_address) {
+                if let Some(ping_result) = check_connectivity_with_mtu(ip_address) {
                     // Add the timestamp and successful MTU size to results
                     results_clone
                         .get(ip_address)
                         .unwrap()
                         .lock()
                         .unwrap()
-                        .push_back((now, successful_mtu));
-                    print!("{NEW_CLEAR_LINE}{ip_address}: {successful_mtu}");
+                        .push_back((now, ping_result.clone()));
+                    print!("{NEW_CLEAR_LINE}{ip_address}: MTU {} latency {} micros", ping_result.mtu, ping_result.latency_micros);
                 } else {
                     // If all MTU sizes fail, store 0 as the MTU size
                     results_clone
@@ -124,7 +142,13 @@ async fn main() {
                         .unwrap()
                         .lock()
                         .unwrap()
-                        .push_back((now, 0));
+                        .push_back((
+                            now,
+                            PingResult {
+                                mtu: 0,
+                                latency_micros: 1_000_000,
+                            },
+                        ));
                     print!("{NEW_CLEAR_LINE}{ip_address}: 0");
                 }
             }
@@ -152,13 +176,21 @@ async fn main() {
             let results_clone = results.clone();
             let ip_addresses = ip_addresses.clone(); // Re-use the original ip_addresses
             async move {
-                let rows = get_rows_for_html_graph(&results_clone, &ip_addresses);
+                let rows1 = get_rows_for_html_graph(&results_clone, &ip_addresses, MetricType::Latency);
+                let rows2 = get_rows_for_html_graph(&results_clone, &ip_addresses, MetricType::MTU);
 
                 // Prepare the column definitions
-                let mut columns = String::from("data.addColumn('date', 'Date');\n");
+                let mut columns1 = String::from("data1.addColumn('date', 'Date');\n");
                 for ip_address in &ip_addresses {
-                    columns.push_str(&format!(
-                        "data.addColumn('number', '{}');\n",
+                    columns1.push_str(&format!(
+                        "data1.addColumn('number', '{}');\n",
+                        ip_address
+                    ));
+                }
+                let mut columns2 = String::from("data2.addColumn('date', 'Date');\n");
+                for ip_address in &ip_addresses {
+                    columns2.push_str(&format!(
+                        "data2.addColumn('number', '{}');\n",
                         ip_address
                     ));
                 }
@@ -171,14 +203,29 @@ async fn main() {
           google.charts.load('current', {{'packages':['annotationchart']}});
           google.charts.setOnLoadCallback(drawChart);
           function drawChart() {{
-            var data = new google.visualization.DataTable();
-            {columns}
-            data.addRows([
-                {rows}
+            var data1 = new google.visualization.DataTable();
+            {columns1}
+            data1.addRows([
+                {rows1}
             ]);
 
-            var chart = new google.visualization.AnnotationChart(document.getElementById('chart_div'));
-            chart.draw(data, {{
+            var chart1 = new google.visualization.AnnotationChart(document.getElementById('chart_div1'));
+            chart1.draw(data1, {{
+              displayAnnotations: true,
+              scaleType: 'allfixed',
+              legendPosition: 'newRow',
+              thickness: 2,
+              zoomStartTime: new Date(new Date().getTime() - 24*60*60*1000)  // Start from 24 hours ago
+            }});
+
+            var data2 = new google.visualization.DataTable();
+            {columns2}
+            data2.addRows([
+                {rows2}
+            ]);
+
+            var chart2 = new google.visualization.AnnotationChart(document.getElementById('chart_div2'));
+            chart2.draw(data2, {{
               displayAnnotations: true,
               scaleType: 'allfixed',
               legendPosition: 'newRow',
@@ -190,7 +237,8 @@ async fn main() {
       </head>
 
       <body>
-        <div id='chart_div' style='width: 900px; height: 500px;'></div>
+        <div id='chart_div1' style='width: 900px; height: 500px;'></div>
+        <div id='chart_div2' style='width: 900px; height: 500px;'></div>
       </body>
     </html>
     "#
