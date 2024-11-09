@@ -1,20 +1,18 @@
 mod model;
 
-use chrono::{DateTime, Datelike, Duration, Local, Timelike};
+use crate::model::{IpResults, MetricType, PingResult};
+use chrono::{Datelike, Duration, Local, Timelike};
 use dotenvy::dotenv;
 use std::collections::BTreeSet;
-use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::env;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use warp::Filter;
-use crate::model::{MetricType, PingResult};
+use tokio::sync::Mutex;
 
 const NEW_CLEAR_LINE: &str = "\n\x1b[K";
 const MOVE_CURSOR_UP: &str = "\r\x1b[";
-const MIN_MTU_SIZE: usize = 1448;
-const MAX_MTU_SIZE: usize = 1504;
 const MTU_STEP: usize = 4;
 
 const PING_OPTIONS: ping_rs::PingOptions = ping_rs::PingOptions {
@@ -37,8 +35,12 @@ fn check_connectivity(ip_address: &IpAddr, mtu_size: usize) -> Option<u128> {
     }
 }
 
-fn check_connectivity_with_mtu(ip_address: &IpAddr) -> Option<PingResult> {
-    for mtu_size in (MIN_MTU_SIZE..=MAX_MTU_SIZE).rev().step_by(MTU_STEP) {
+fn check_connectivity_with_mtu(
+    ip_address: &IpAddr,
+    min_mtu_size: usize,
+    max_mtu_size: usize,
+) -> Option<PingResult> {
+    for mtu_size in (min_mtu_size..=max_mtu_size).rev().step_by(MTU_STEP) {
         if let Some(latency_micros) = check_connectivity(ip_address, mtu_size) {
             return Some(PingResult {
                 mtu: mtu_size,
@@ -49,17 +51,18 @@ fn check_connectivity_with_mtu(ip_address: &IpAddr) -> Option<PingResult> {
     None // Return None if all MTU sizes fail
 }
 
-fn get_rows_for_html_graph(
-    results: &HashMap<IpAddr, Arc<Mutex<VecDeque<(DateTime<Local>, PingResult)>>>>,
+async fn get_rows_for_html_graph(
+    results: &IpResults,
     ip_addresses: &[IpAddr],
-    metric_type: MetricType,
+    metric_type: &MetricType,
 ) -> String {
     let mut rows = vec![];
 
     // Collect all unique timestamps
     let mut timestamps_set = BTreeSet::new();
     for ip in ip_addresses {
-        for &(timestamp, _) in results.get(ip).unwrap().lock().unwrap().iter() {
+        let timestamps = results.get(ip).unwrap().lock().await;
+        for &(timestamp, _) in timestamps.iter() {
             timestamps_set.insert(timestamp);
         }
     }
@@ -80,12 +83,14 @@ fn get_rows_for_html_graph(
                 .get(ip)
                 .unwrap()
                 .lock()
-                .unwrap()
+                .await
                 .iter()
                 .find(|&&(ts, _)| ts == timestamp)
-                .map(|(_, ping_result)| match metric_type { MetricType::MTU => ping_result.mtu as f64, MetricType::Latency => ping_result.latency_micros as f64 })
-                .unwrap_or(0.0); // If no data for that timestamp, use 0
-            row.push_str(&format!("{}", mtu_size));
+                .map_or(0.0, |(_, ping_result)| match metric_type {
+                    MetricType::Mtu => ping_result.mtu as f64,
+                    MetricType::Latency => ping_result.latency_micros as f64,
+                }); // If no data for that timestamp, use 0
+            row.push_str(&format!("{mtu_size}"));
             if i < ip_addresses.len() - 1 {
                 row.push_str(", ");
             }
@@ -95,7 +100,6 @@ fn get_rows_for_html_graph(
     }
     rows.join(",\n")
 }
-
 
 #[tokio::main]
 async fn main() {
@@ -107,14 +111,22 @@ async fn main() {
         .map(|ip| ip.trim().parse().expect("Invalid IP address format"))
         .collect();
 
+    let min_mtu_size: usize = env::var("MIN_MTU_SIZE")
+        .expect("MIN_MTU_SIZE must be set in .env")
+        .parse()
+        .expect("Invalid MIN_MTU_SIZE");
+    let max_mtu_size: usize = env::var("MAX_MTU_SIZE")
+        .expect("MAX_MTU_SIZE must be set in .env")
+        .parse()
+        .expect("Invalid MAX_MTU_SIZE");
+
     // Clone ip_addresses before moving it into the async closure
     let ip_addresses_clone = ip_addresses.clone();
 
-    let results: HashMap<IpAddr, Arc<Mutex<VecDeque<(DateTime<Local>, PingResult)>>>> =
-        ip_addresses
-            .iter()
-            .map(|ip| (*ip, Arc::new(Mutex::new(VecDeque::new()))))
-            .collect();
+    let results: IpResults = ip_addresses
+        .iter()
+        .map(|ip| (*ip, Arc::new(Mutex::new(VecDeque::new()))))
+        .collect();
 
     let results_clone = results.clone();
 
@@ -122,44 +134,57 @@ async fn main() {
         println!("start time {}", Local::now());
 
         loop {
-            let now = Local::now();
+            let current_minute = Local::now()
+                .with_second(0)
+                .unwrap()
+                .with_nanosecond(0)
+                .unwrap();
+
             print!("{MOVE_CURSOR_UP}7A");
             for ip_address in &ip_addresses_clone {
                 // Check for successful MTU size
-                if let Some(ping_result) = check_connectivity_with_mtu(ip_address) {
-                    // Add the timestamp and successful MTU size to results
-                    results_clone
-                        .get(ip_address)
-                        .unwrap()
-                        .lock()
-                        .unwrap()
-                        .push_back((now, ping_result.clone()));
-                    print!("{NEW_CLEAR_LINE}{ip_address}: MTU {} latency {} micros", ping_result.mtu, ping_result.latency_micros);
-                } else {
-                    // If all MTU sizes fail, store 0 as the MTU size
-                    results_clone
-                        .get(ip_address)
-                        .unwrap()
-                        .lock()
-                        .unwrap()
-                        .push_back((
-                            now,
+                let ping_result =
+                    check_connectivity_with_mtu(ip_address, min_mtu_size, max_mtu_size).unwrap_or(
+                        PingResult {
+                            mtu: 0,
+                            latency_micros: 1_000_000,
+                        },
+                    );
+                let mut results_lock = results_clone.get(ip_address).unwrap().lock().await;
+                // Check if we already have an entry for the current minute
+                if let Some((last_time, last_result)) = results_lock.pop_back() {
+                    // If it's the same minute and latency is higher, update it
+                    if last_time == current_minute {
+                        results_lock.push_back((
+                            current_minute,
                             PingResult {
-                                mtu: 0,
-                                latency_micros: 1_000_000,
+                                mtu: last_result.mtu.min(ping_result.mtu),
+                                latency_micros: last_result
+                                    .latency_micros
+                                    .max(ping_result.latency_micros),
                             },
                         ));
-                    print!("{NEW_CLEAR_LINE}{ip_address}: 0");
+                    } else {
+                        results_lock.push_back((last_time, last_result));
+                        results_lock.push_back((current_minute, ping_result.clone()));
+                    }
+                } else {
+                    // Add to results if no entry exists
+                    results_lock.push_back((current_minute, ping_result.clone()));
                 }
+                print!(
+                    "{NEW_CLEAR_LINE}{ip_address}: MTU {} latency {} micros",
+                    ping_result.mtu, ping_result.latency_micros
+                );
             }
 
             println!();
 
             // Remove old results older than one week
-            let one_week_ago = now - Duration::days(7);
+            let one_week_ago = current_minute - Duration::days(7);
             for ip_address in &ip_addresses_clone {
                 let results_for_ip = results_clone.get(ip_address).unwrap();
-                let mut results_lock = results_for_ip.lock().unwrap();
+                let mut results_lock = results_for_ip.lock().await;
                 while results_lock
                     .front()
                     .map_or(false, |(timestamp, _)| *timestamp < one_week_ago)
@@ -176,34 +201,26 @@ async fn main() {
             let results_clone = results.clone();
             let ip_addresses = ip_addresses.clone(); // Re-use the original ip_addresses
             async move {
-                let rows1 = get_rows_for_html_graph(&results_clone, &ip_addresses, MetricType::Latency);
-                let rows2 = get_rows_for_html_graph(&results_clone, &ip_addresses, MetricType::MTU);
+                let mut html = String::from(r#"<html>
+      <head>
+        <script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>
+        <script type='text/javascript'>
+          google.charts.load('current', {'packages':['annotationchart']});
+          google.charts.setOnLoadCallback(drawChart);
+          function drawChart() {"#);
+
+                let rows1 = get_rows_for_html_graph(&results_clone, &ip_addresses, &MetricType::Latency).await;
 
                 // Prepare the column definitions
                 let mut columns1 = String::from("data1.addColumn('date', 'Date');\n");
                 for ip_address in &ip_addresses {
                     columns1.push_str(&format!(
-                        "data1.addColumn('number', '{}');\n",
-                        ip_address
-                    ));
-                }
-                let mut columns2 = String::from("data2.addColumn('date', 'Date');\n");
-                for ip_address in &ip_addresses {
-                    columns2.push_str(&format!(
-                        "data2.addColumn('number', '{}');\n",
-                        ip_address
-                    ));
-                }
+                        "data1.addColumn('number', '{ip_address}');\n",
 
-                let html = format!(
-                    r#"<html>
-      <head>
-        <script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>
-        <script type='text/javascript'>
-          google.charts.load('current', {{'packages':['annotationchart']}});
-          google.charts.setOnLoadCallback(drawChart);
-          function drawChart() {{
-            var data1 = new google.visualization.DataTable();
+                    ));
+                }
+                html = format!(r#"{html}
+                 var data1 = new google.visualization.DataTable();
             {columns1}
             data1.addRows([
                 {rows1}
@@ -217,8 +234,19 @@ async fn main() {
               thickness: 2,
               zoomStartTime: new Date(new Date().getTime() - 24*60*60*1000)  // Start from 24 hours ago
             }});
+            "#);
 
-            var data2 = new google.visualization.DataTable();
+                if min_mtu_size < max_mtu_size {
+                    let rows2 = get_rows_for_html_graph(&results_clone, &ip_addresses, &MetricType::Mtu).await;
+                    let mut columns2 = String::from("data2.addColumn('date', 'Date');\n");
+                    for ip_address in &ip_addresses {
+                        columns2.push_str(&format!(
+                            "data2.addColumn('number', '{ip_address}');\n",
+                        ));
+                    }
+
+                    html = format!(r#"{html}
+                 var data2 = new google.visualization.DataTable();
             {columns2}
             data2.addRows([
                 {rows2}
@@ -232,6 +260,11 @@ async fn main() {
               thickness: 2,
               zoomStartTime: new Date(new Date().getTime() - 24*60*60*1000)  // Start from 24 hours ago
             }});
+            "#);
+                }
+
+                html = format!(
+                    r#"{html}
           }}
         </script>
       </head>
