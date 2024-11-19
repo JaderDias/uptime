@@ -121,6 +121,16 @@ async fn main() {
         .parse()
         .expect("Invalid MAX_MTU_SIZE");
 
+    let interval_millis: u64 = env::var("INTERVAL_MILLIS")
+        .expect("INTERVAL_MILLIS must be set in .env")
+        .parse()
+        .expect("Invalid INTERVAL_MILLIS");
+
+    let port: u16 = env::var("PORT")
+        .expect("PORT must be set in .env")
+        .parse()
+        .expect("Invalid PORT");
+
     // Clone ip_addresses before moving it into the async closure
     let ip_addresses_clone = ip_addresses.clone();
 
@@ -193,6 +203,8 @@ async fn main() {
                     results_lock.pop_front();
                 }
             }
+
+            tokio::time::sleep(std::time::Duration::from_millis(interval_millis)).await;
         }
     });
 
@@ -281,6 +293,6 @@ async fn main() {
             }
         });
 
-    println!("Report also available via HTTP port 8080");
-    warp::serve(report_route).run(([0, 0, 0, 0], 8080)).await;
+    println!("Report also available via HTTP port {port}");
+    warp::serve(report_route).run(([0, 0, 0, 0], port)).await;
 }
