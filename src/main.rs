@@ -140,7 +140,7 @@ async fn main() {
                 .with_nanosecond(0)
                 .unwrap();
 
-            print!("{MOVE_CURSOR_UP}7A");
+            print!("{MOVE_CURSOR_UP}{}A", &ip_addresses_clone.len() + 1);
             for ip_address in &ip_addresses_clone {
                 // Check for successful MTU size
                 let ping_result =
