@@ -51,6 +51,7 @@ fn check_connectivity_with_mtu(
     None // Return None if all MTU sizes fail
 }
 
+#[allow(clippy::cast_precision_loss)]
 async fn get_rows_for_html_graph(
     results: &IpResults,
     ip_addresses: &[IpAddr],
@@ -201,13 +202,13 @@ async fn main() {
             let results_clone = results.clone();
             let ip_addresses = ip_addresses.clone(); // Re-use the original ip_addresses
             async move {
-                let mut html = String::from(r#"<html>
+                let mut html = String::from("<html>
       <head>
         <script type='text/javascript' src='https://www.gstatic.com/charts/loader.js'></script>
         <script type='text/javascript'>
           google.charts.load('current', {'packages':['annotationchart']});
           google.charts.setOnLoadCallback(drawChart);
-          function drawChart() {"#);
+          function drawChart() {");
 
                 let rows1 = get_rows_for_html_graph(&results_clone, &ip_addresses, &MetricType::Latency).await;
 
