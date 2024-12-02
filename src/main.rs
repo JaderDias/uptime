@@ -8,24 +8,23 @@ use std::collections::VecDeque;
 use std::env;
 use std::net::IpAddr;
 use std::sync::Arc;
-use warp::Filter;
 use tokio::sync::Mutex;
+use warp::Filter;
 
 const NEW_CLEAR_LINE: &str = "\n\x1b[K";
 const MOVE_CURSOR_UP: &str = "\r\x1b[";
 const MTU_STEP: usize = 4;
 
-const PING_OPTIONS: ping_rs::PingOptions = ping_rs::PingOptions {
-    ttl: 128,
-    dont_fragment: true,
-};
-
-fn check_connectivity(ip_address: &IpAddr, mtu_size: usize) -> Option<u128> {
-    let timeout = std::time::Duration::from_secs(1);
+fn check_connectivity(
+    ip_address: &IpAddr,
+    mtu_size: usize,
+    ping_options: &ping_rs::PingOptions,
+    timeout: &std::time::Duration,
+) -> Option<u128> {
     let data: Vec<u8> = vec![0; mtu_size];
 
     let start_time = std::time::Instant::now();
-    let result = ping_rs::send_ping(ip_address, timeout, &data, Some(&PING_OPTIONS));
+    let result = ping_rs::send_ping(ip_address, *timeout, &data, Some(ping_options));
     let latency_micros = start_time.elapsed().as_micros();
 
     if result.is_ok() {
@@ -39,9 +38,13 @@ fn check_connectivity_with_mtu(
     ip_address: &IpAddr,
     min_mtu_size: usize,
     max_mtu_size: usize,
+    ping_options: &ping_rs::PingOptions,
+    timeout: &std::time::Duration,
 ) -> Option<PingResult> {
     for mtu_size in (min_mtu_size..=max_mtu_size).rev().step_by(MTU_STEP) {
-        if let Some(latency_micros) = check_connectivity(ip_address, mtu_size) {
+        if let Some(latency_micros) =
+            check_connectivity(ip_address, mtu_size, ping_options, timeout)
+        {
             return Some(PingResult {
                 mtu: mtu_size,
                 latency_micros,
@@ -131,6 +134,23 @@ async fn main() {
         .parse()
         .expect("Invalid PORT");
 
+    let timeout_millis: u64 = env::var("TIMEOUT_MILLIS")
+        .expect("TIMEOUT_MILLIS must be set in .env")
+        .parse()
+        .expect("Invalid TIMEOUT_MILLIS");
+
+    let timeout = std::time::Duration::from_millis(timeout_millis);
+
+    let dont_fragment: bool = env::var("DO")
+        .expect("DO must be set in .env")
+        .parse()
+        .expect("Invalid DO");
+
+    let ping_options: ping_rs::PingOptions = ping_rs::PingOptions {
+        ttl: 128,
+        dont_fragment,
+    };
+
     // Clone ip_addresses before moving it into the async closure
     let ip_addresses_clone = ip_addresses.clone();
 
@@ -154,13 +174,17 @@ async fn main() {
             print!("{MOVE_CURSOR_UP}{}A", &ip_addresses_clone.len() + 1);
             for ip_address in &ip_addresses_clone {
                 // Check for successful MTU size
-                let ping_result =
-                    check_connectivity_with_mtu(ip_address, min_mtu_size, max_mtu_size).unwrap_or(
-                        PingResult {
-                            mtu: 0,
-                            latency_micros: 1_000_000,
-                        },
-                    );
+                let ping_result = check_connectivity_with_mtu(
+                    ip_address,
+                    min_mtu_size,
+                    max_mtu_size,
+                    &ping_options,
+                    &timeout,
+                )
+                .unwrap_or(PingResult {
+                    mtu: 0,
+                    latency_micros: 1_000_000,
+                });
                 let mut results_lock = results_clone.get(ip_address).unwrap().lock().await;
                 // Check if we already have an entry for the current minute
                 if let Some((last_time, last_result)) = results_lock.pop_back() {
